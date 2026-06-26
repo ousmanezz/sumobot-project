@@ -1,0 +1,273 @@
+/*
+ * test_Lsensors.c
+ *
+ *  Created on: Apr 2, 2024
+ *      Author: nikiemao
+ *
+ *   This program reads the light intensity from the two sensors Line sensors and
+ *   return the intensity in terms of percentage on the lCD screen. This percentage is used to determine
+ *   the threshold of reflected light on dark or white surfaces.
+ *   This program used a ADC conversion (ADC4) to convert the analog input to digital output.
+ *   The thresholds values are used to determine the correct behavior of the Sumobot.
+ *   When the sensor detects a line, it backs up, then turn left or right depending on which sensor
+ *   detects it. After that it continues it's initial motion which is forward.
+ *
+ */
+
+#include "stm32u5xx.h"
+#include "main.h"
+#include <sumobot.h>
+
+uint16_t sensor0_val = 0;
+uint16_t sensor1_val = 0;
+uint8_t currentChannel = 0; // 0 for Left, 1 for Right
+
+
+
+int main(void){
+    msoe_clk_setup(160);  // 160 MHz
+    msoe_delay_init();
+    LCD_IO_Init();
+
+    RCC->AHB3ENR |= RCC_AHB3ENR_PWREN;  // enable clock for PWR module
+   //initialization of port pins and timer
+    initBasic();
+    initGPIO();
+    initTim2();
+	initAdc();
+	initInterrupt();
+
+    typedef enum {FWD,BWD, LEFTURN, RIGHTURN}state;
+    state current_state = FWD;
+
+    int sensor0;
+    int sensor1;
+    int sensor2;
+    int sensor3;
+    int intensity0;
+    int intensity1;
+
+
+	LCD_print_char(3, 12,'%');
+	LCD_print_char(5, 13,'%');
+	LCD_print_str(3, 0,"L sensor");
+	LCD_print_str(5, 0,"R sensor");
+
+	forward(0, 0);
+	msoe_delay_ms(5000);
+    ADC4->CR |= (1 << 2); // start the conversion
+    while(1){
+    	msoe_delay_ms(500);
+
+
+        if (currentChannel == 0) {
+            // Process left photocell reading
+        	// calculated value of the voltage that produces the intensity
+            float vin = ((float)sensor0_val / 1023) * 3.3;
+            // calculated light intensity in percentage of the left photocell
+            intensity0 = (vin / 3.3) * 100;
+            LCD_print_udec3(3, 7, intensity0);
+            //msoe_delay_ms(10);
+        }
+        if (currentChannel == 1){
+            // Process right photocell reading
+        	// calculated value of the voltage that produces the intensity
+            float vin = ((float)sensor1_val / 1023) * 3.3;
+            // calculated light intensity in percentage of the right photocell
+            intensity1 = (vin / 3.3) * 100;
+            LCD_print_udec3(5, 8, intensity1);
+            //msoe_delay_ms(10);
+
+        }
+
+        //threshold setup for line detection
+        if(intensity0 < 65){
+        	sensor0 = 0;
+        	LCD_print_udec3(3, 15, sensor0);
+        }
+        else {
+        	sensor0 = 1;
+        	LCD_print_udec3(3, 15, sensor0);
+        }
+
+        if(intensity1 < 78){
+        	sensor1 = 0;
+        	LCD_print_udec3(5, 15, sensor1);
+        }
+        else {
+        	sensor1 = 1;
+        	LCD_print_udec3(5, 15, sensor1);
+        }
+
+
+        // sumobot behavior depending line sensing using a FSM
+    	if(current_state == FWD){
+    		if(sensor0 == 0 && sensor1 == 1){
+    			stop();
+                msoe_delay_ms(200);
+                backward(0.6, 0.6);
+                msoe_delay_ms(1600);
+        		current_state = RIGHTURN;
+    		}
+
+    		else if(sensor0 == 1 && sensor1 == 0){
+    			stop();
+                msoe_delay_ms(200);
+                backward(0.6, 0.6);
+                msoe_delay_ms(1600);
+        		current_state = LEFTURN;
+    		}
+
+    		else if(sensor0 == 0 && sensor1 == 0){
+    			stop();
+                msoe_delay_ms(200);
+                backward(0.6, 0.6);
+                msoe_delay_ms(1600);
+        		current_state = RIGHTURN;
+    		}
+    		else{
+        		current_state = FWD;
+    		}
+    	}
+
+    	if(current_state == BWD){
+    		if((sensor0 == 0 && sensor1 == 1) || (sensor0 == 1 && sensor1 == 0) || (sensor0 == 0 && sensor1 == 0) ){
+                forward(0.6, 0.6);
+                msoe_delay_ms(1600);
+    			current_state = RIGHTURN;
+    		}
+    		else{
+                backward(0.6, 0.6);
+                msoe_delay_ms(1600);
+        		current_state = FWD;
+    		}
+    	}
+
+    	if(current_state == RIGHTURN){
+    		if(sensor0 == 0 && sensor1 == 1 ){
+        		current_state = LEFTURN;
+    		}
+    		else if((sensor0 == 1 && sensor1 == 0) ||(sensor0 == 0 && sensor1 == 0)){
+        		current_state = RIGHTURN;
+    		}
+    		else{
+        		turn_right(0, 0.6);
+        		msoe_delay_ms(2000);
+        		current_state = FWD;
+    		}
+    	}
+
+    	if(current_state == LEFTURN){
+    		if(sensor0 == 0 && sensor1 == 1 ){
+        		current_state = RIGHTURN;
+    		}
+    		else if((sensor0 == 1 && sensor1 == 0) ||(sensor0 == 0 && sensor1 == 0)){
+        		current_state = LEFTURN;
+    		}
+    		else{
+    	    	turn_left(0.6, 0);
+    	    	msoe_delay_ms(2000);
+        		current_state = FWD;
+    		}
+    	}
+
+    	if(current_state == FWD)
+    		forward(0.7, 0.7);
+    	else if(current_state == BWD)
+    		backward(0.7, 0.7);
+    	else if(current_state == RIGHTURN)
+    		turn_right(0.2, 0.6);
+    	else
+    		turn_left(0.6, 0.2);
+
+
+    	/*if(current_state == FWD){
+    		if(sensor0 == 0 && !(sensor1 == 0)){
+    			stop();
+                msoe_delay_ms(200);
+        		current_state = BWD;
+    		}
+
+    		else if(!(sensor0 == 0) && sensor1 == 0){
+    			stop();
+                msoe_delay_ms(200);
+        		current_state = BWD;
+    		}
+
+    		else if(sensor0 == 0 && sensor1 == 0){
+    			stop();
+                msoe_delay_ms(200);
+        		current_state = BWD;
+    		}
+    		else{
+        		current_state = FWD;
+    		}
+    	}
+
+    	if(current_state == BWD){
+    		if((sensor0 == 2 && sensor1 == 1) ){
+    			current_state = RIGHTURN;
+    		}
+    		else if(sensor0 == 1 && sensor1 == 2){
+    			current_state = LEFTURN;
+    		}
+    		else if(sensor0 == 1 && sensor1 == 1){
+    			current_state = FWD;
+    		}
+    		else{
+        		current_state = BWD;
+    		}
+    	}
+
+    	if(current_state == RIGHTURN){
+    		if(sensor0 == 0 && !(sensor1 == 0) ){
+        		current_state = BWD;
+    		}
+    		else if((!(sensor0 == 0) && sensor1 == 0) ||(sensor0 == 0 && sensor1 == 0)){
+        		current_state = BWD;
+    		}
+    		else{
+        		current_state = RIGHTURN;
+    		}
+    	}
+
+    	if(current_state == LEFTURN){
+    		if(sensor0 == 0 && !(sensor1 == 0)){
+        		current_state = BWD;
+    		}
+    		else if((!(sensor0 == 0) && sensor1 == 0) ||(sensor0 == 0 && sensor1 == 0)){
+        		current_state = BWD;
+    		}
+    		else{
+    			current_state = LEFTURN;
+    		}
+    	}
+
+    	if(current_state == FWD)
+    		forward(0.7, 0.7);
+    	else if(current_state == BWD)
+    		backward(0.7, 0.7);
+    	else if(current_state == RIGHTURN)
+    		turn_right(0.2, 0.6);
+    	else
+    		turn_left(0.6, 0.2);*/
+
+    }
+
+    }// end main
+
+// analog to digital converter ISR handler
+void ADC4_IRQHandler(void){
+	if(ADC4->ISR & (1 << 2)){ // check if conversion flag is set
+		if (currentChannel == 0){// channel 6 is selected
+			sensor0_val = ADC4->DR; // store conversion data in the left sensor
+			currentChannel = 1; // switch to right channel
+			ADC4->CHSELR |= (1 << 5); // select channel 5 for next conversion
+		}
+		else {
+			sensor1_val = ADC4->DR;// store conversion data in the right sensor
+			currentChannel = 0;// switch to left channel
+			ADC4->CHSELR |= (1 << 6);// select channel 6 for next conversion
+		}
+	}
+}// end ADC4_IRGHandler
